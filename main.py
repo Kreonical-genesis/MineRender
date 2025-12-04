@@ -165,44 +165,79 @@ def paste_texture_on_quad(canvas: Image.Image, texture_img: Image.Image, uv_box,
             if DEBUG:
                 print(f"[paste_fallback] fallback paste failed: {e2}", file=sys.stderr)
             return False, "skip", "fallback_failed"
+    if u1 < u0:
+        src = src.transpose(Image.FLIP_LEFT_RIGHT)
+        u0, u1 = u1, u0
+    if v1 < v0:
+        src = src.transpose(Image.FLIP_TOP_BOTTOM)
+        v0, v1 = v1, v0
+
 
 def iso_project(x, y, z, scale=SCALE):
-    sx = (x - z)
-    sy = (x + z) / 2 - y
-    px = int(sx * scale + OFFSET[0])
-    py = int(-sy * scale + OFFSET[1])
+    # Minecraft approx isometric: 30° X, 45° Y
+    px = int((x - z) * scale + OFFSET[0])
+    py = int((x + z)/2 * scale - y * scale + OFFSET[1])
     return px, py
 
 
-def quad_for_face(elem_from, elem_to, face_name):
+def rotate_elem_point(point, rotation):
+    """
+    point: (x, y, z)
+    rotation: {"origin": [ox, oy, oz], "axis": "x|y|z", "angle": deg, "rescale": bool}
+    Возвращает координаты после rotation
+    """
+    import math
+    x, y, z = point
+    if not rotation:
+        return x, y, z
+    ox, oy, oz = rotation.get("origin", [8,8,8])
+    angle = math.radians(rotation.get("angle",0))
+    axis = rotation.get("axis","y")
+    # translate to origin
+    x -= ox; y -= oy; z -= oz
+    # rotate
+    if axis=="x":
+        y, z = y*math.cos(angle)-z*math.sin(angle), y*math.sin(angle)+z*math.cos(angle)
+    elif axis=="y":
+        x, z = x*math.cos(angle)+z*math.sin(angle), -x*math.sin(angle)+z*math.cos(angle)
+    elif axis=="z":
+        x, y = x*math.cos(angle)-y*math.sin(angle), x*math.sin(angle)+y*math.cos(angle)
+    # translate back
+    x += ox; y += oy; z += oz
+    return x, y, z
+
+def quad_for_face(elem_from, elem_to, face_name, rotation=None):
     try:
         x1, y1, z1 = elem_from
         x2, y2, z2 = elem_to
     except Exception:
         return None
+
     v = {
-        "000": (x1, y1, z1),
-        "001": (x1, y1, z2),
-        "010": (x1, y2, z1),
-        "011": (x1, y2, z2),
-        "100": (x2, y1, z1),
-        "101": (x2, y1, z2),
-        "110": (x2, y2, z1),
-        "111": (x2, y2, z2),
+        "000": rotate_elem_point((x1, y1, z1), rotation),
+        "001": rotate_elem_point((x1, y1, z2), rotation),
+        "010": rotate_elem_point((x1, y2, z1), rotation),
+        "011": rotate_elem_point((x1, y2, z2), rotation),
+        "100": rotate_elem_point((x2, y1, z1), rotation),
+        "101": rotate_elem_point((x2, y1, z2), rotation),
+        "110": rotate_elem_point((x2, y2, z1), rotation),
+        "111": rotate_elem_point((x2, y2, z2), rotation),
     }
-    if face_name == "north":   # -z
-        return [v["100"], v["101"], v["001"], v["000"]]
-    if face_name == "south":   # +z
-        return [v["011"], v["010"], v["110"], v["111"]]
-    if face_name == "west":    # -x
-        return [v["000"], v["001"], v["011"], v["010"]]
-    if face_name == "east":    # +x
-        return [v["110"], v["100"], v["000"], v["010"]]
-    if face_name == "up":      # -y (top)
-        return [v["010"], v["110"], v["100"], v["000"]]
-    if face_name == "down":    # +y (bottom)
-        return [v["101"], v["111"], v["011"], v["001"]]
-    return None
+
+    faces = {
+        "north": ["100","101","001","000"],
+        "south": ["011","010","110","111"],
+        "west":  ["000","001","011","010"],
+        "east":  ["110","100","000","010"],
+        "up":    ["010","110","100","000"],
+        "down":  ["101","111","011","001"]
+    }
+
+    keys = faces.get(face_name)
+    if not keys:
+        return None
+    return [v[k] for k in keys]
+
 
 
 def find_models(extracted_root: Path):
@@ -305,7 +340,7 @@ def render_model_to_image(model_json, extracted_root: Path):
             fx = (e["from"][0] + e["to"][0]) / 2
             fz = (e["from"][2] + e["to"][2]) / 2
             fy = (e["from"][1] + e["to"][1]) / 2
-            return (fx + fz) / 2 - fy
+            return (fz, -fy, fx)  # сортируем по z, потом y, потом x
         except Exception:
             return 0
 
